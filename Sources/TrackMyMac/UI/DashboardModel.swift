@@ -8,21 +8,27 @@ enum Period: String, CaseIterable, Identifiable {
     case year = "近 365 天"
     var id: String { rawValue }
 
+    /// Calendar bounds aligned to day boundaries so the chart x-axis can show
+    /// the full period (e.g. today = 00:00 → 24:00 even at 9 AM).
     func range(now: Date = Date()) -> (Date, Date) {
         let cal = Calendar.current
         switch self {
         case .today:
             let start = cal.startOfDay(for: now)
-            return (start, now)
+            let end = cal.date(byAdding: .day, value: 1, to: start)!
+            return (start, end)
         case .week:
-            let start = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: now))!
-            return (start, now)
+            let endDay = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))!
+            let start = cal.date(byAdding: .day, value: -7, to: endDay)!
+            return (start, endDay)
         case .month:
-            let start = cal.date(byAdding: .day, value: -29, to: cal.startOfDay(for: now))!
-            return (start, now)
+            let endDay = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))!
+            let start = cal.date(byAdding: .day, value: -30, to: endDay)!
+            return (start, endDay)
         case .year:
-            let start = cal.date(byAdding: .day, value: -364, to: cal.startOfDay(for: now))!
-            return (start, now)
+            let endDay = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))!
+            let start = cal.date(byAdding: .day, value: -365, to: endDay)!
+            return (start, endDay)
         }
     }
 }
@@ -38,6 +44,15 @@ struct Summary {
     var keyCategories: [(String, Int)] = []
     /// Buckets for timeline. Each tuple: (epochStart, keys, clicks, activeSec)
     var timeline: [(epochStart: Date, keys: Int, clicks: Int, activeSec: Int)] = []
+    /// Per-keycode counts for heatmap.
+    var keyHeatmap: [Int: Int] = [:]
+    /// Top shortcuts (e.g. "⌘⇧A") with their counts.
+    var topShortcuts: [(label: String, count: Int)] = []
+    /// Inclusive period bounds — used to set chart x-axis domain.
+    var periodStart: Date = Date()
+    var periodEnd: Date = Date()
+    /// Bucket size in seconds.
+    var bucketSec: Int = 60
 }
 
 final class DashboardModel: ObservableObject {
@@ -68,29 +83,49 @@ final class DashboardModel: ObservableObject {
             let sum = Database.shared.summary(from: from, to: to)
             let bucketSec: Int = {
                 switch p {
-                case .today: return 60 * 30   // 30-min buckets
-                case .week: return 3600 * 6   // 6-hour buckets
-                case .month: return 86400     // daily
-                case .year: return 86400 * 7  // weekly
+                case .today: return 60 * 30   // 30-min buckets across 0..24
+                case .week: return 3600 * 6   // 6-hour buckets across 7 days
+                case .month: return 86400     // daily across 30 days
+                case .year: return 86400 * 7  // weekly across 52 weeks
                 }
             }()
-            let buckets = Database.shared.minuteBuckets(from: from, to: to, bucketSec: bucketSec)
-            let timeline = buckets.map { (Date(timeIntervalSince1970: TimeInterval($0.bucket * Int64(bucketSec))), $0.keys, $0.clicks, $0.activeSec) }
+            // Build complete bucket list (including zero buckets) so the timeline
+            // chart spans the full period regardless of whether data exists.
+            let dbBuckets = Database.shared.minuteBuckets(from: from, to: to, bucketSec: bucketSec)
+            var byBucket = Dictionary(uniqueKeysWithValues: dbBuckets.map { ($0.bucket, ($0.keys, $0.clicks, $0.activeSec)) })
+            let firstBucket = Int64(from) / Int64(bucketSec)
+            let lastBucket = Int64(to - 1) / Int64(bucketSec)
+            var timeline: [(Date, Int, Int, Int)] = []
+            if lastBucket >= firstBucket {
+                for b in firstBucket...lastBucket {
+                    let v = byBucket.removeValue(forKey: b) ?? (0, 0, 0)
+                    let date = Date(timeIntervalSince1970: TimeInterval(b * Int64(bucketSec)))
+                    timeline.append((date, v.0, v.1, v.2))
+                }
+            }
+
             let apps = Database.shared.topApps(from: from, to: to, limit: 10)
             let cats = Database.shared.keyCategoryBreakdown(from: from, to: to)
+            let heatmap = Database.shared.keycodeHeatmap(from: from, to: to)
+            let shortcuts = Database.shared.topShortcuts(from: from, to: to, limit: 10)
 
             DispatchQueue.main.async {
-                var s = Summary()
-                s.keys = sum.keys
-                s.clicks = sum.clicks
-                s.scrolls = sum.scrolls
-                s.activeSec = sum.activeSec
-                s.screenSec = sum.screenSec
-                s.moveDist = sum.moveDist
-                s.topApps = apps
-                s.keyCategories = cats
-                s.timeline = timeline.map { (epochStart: $0.0, keys: $0.1, clicks: $0.2, activeSec: $0.3) }
-                self.summary = s
+                var result = Summary()
+                result.keys = sum.keys
+                result.clicks = sum.clicks
+                result.scrolls = sum.scrolls
+                result.activeSec = sum.activeSec
+                result.screenSec = sum.screenSec
+                result.moveDist = sum.moveDist
+                result.topApps = apps
+                result.keyCategories = cats
+                result.keyHeatmap = heatmap
+                result.topShortcuts = shortcuts
+                result.timeline = timeline.map { (epochStart: $0.0, keys: $0.1, clicks: $0.2, activeSec: $0.3) }
+                result.periodStart = s
+                result.periodEnd = e
+                result.bucketSec = bucketSec
+                self.summary = result
             }
         }
     }

@@ -16,10 +16,12 @@ struct DashboardView: View {
                     }
                     statsCards
                     timelineCard
+                    keyboardHeatmapCard
                     HStack(alignment: .top, spacing: 16) {
                         topAppsCard
                         keyCategoryCard
                     }
+                    shortcutsCard
                     footer
                 }
                 .padding(20)
@@ -95,6 +97,8 @@ struct DashboardView: View {
 
     private var timelineCard: some View {
         let timeline = model.summary.timeline
+        let s = model.summary.periodStart
+        let e = model.summary.periodEnd
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("活动时间线").font(.headline)
@@ -103,28 +107,76 @@ struct DashboardView: View {
             }
             if timeline.isEmpty {
                 placeholder("暂无活动数据")
-                    .frame(height: 200)
+                    .frame(height: 220)
             } else {
                 Chart {
                     ForEach(Array(timeline.enumerated()), id: \.offset) { _, b in
                         BarMark(
-                            x: .value("时间", b.epochStart, unit: chartUnit),
-                            y: .value("按键", b.keys)
+                            x: .value("时间", b.epochStart),
+                            y: .value("按键", b.keys),
+                            width: .fixed(barWidth)
                         )
-                        .foregroundStyle(.blue.gradient)
+                        .foregroundStyle(by: .value("类型", "按键"))
                         BarMark(
-                            x: .value("时间", b.epochStart, unit: chartUnit),
-                            y: .value("点击", b.clicks)
+                            x: .value("时间", b.epochStart),
+                            y: .value("点击", b.clicks),
+                            width: .fixed(barWidth)
                         )
-                        .foregroundStyle(.pink.gradient)
+                        .foregroundStyle(by: .value("类型", "点击"))
                     }
                 }
+                .chartForegroundStyleScale([
+                    "按键": Color.blue.gradient,
+                    "点击": Color.pink.gradient
+                ])
+                .chartXScale(domain: s...e)
+                .chartXAxis { timelineAxisMarks }
                 .chartLegend(.visible)
-                .frame(height: 220)
+                .frame(height: 240)
             }
         }
         .padding(16)
         .background(cardBackground)
+    }
+
+    /// X-axis tick configuration tuned per period.
+    @AxisContentBuilder
+    private var timelineAxisMarks: some AxisContent {
+        switch model.period {
+        case .today:
+            AxisMarks(values: .stride(by: .hour, count: 2)) { value in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel(format: .dateTime.hour())
+            }
+        case .week:
+            AxisMarks(values: .stride(by: .day, count: 1)) { value in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+            }
+        case .month:
+            AxisMarks(values: .stride(by: .day, count: 3)) { value in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+            }
+        case .year:
+            AxisMarks(values: .stride(by: .month, count: 1)) { value in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel(format: .dateTime.month(.abbreviated))
+            }
+        }
+    }
+
+    private var barWidth: CGFloat {
+        switch model.period {
+        case .today: return 8
+        case .week: return 14
+        case .month: return 6
+        case .year: return 5
+        }
     }
 
     private var topAppsCard: some View {
@@ -160,6 +212,74 @@ struct DashboardView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+    }
+
+    private var keyboardHeatmapCard: some View {
+        let map = model.summary.keyHeatmap
+        let maxCount = max(map.values.max() ?? 0, 1)
+        let totalKeys = map.values.reduce(0, +)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("键盘热力图").font(.headline)
+                Spacer()
+                Text("总按键 \(totalKeys) · 命中键 \(map.count)")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            if totalKeys == 0 {
+                placeholder("暂无按键数据").frame(height: 220)
+            } else {
+                KeyboardHeatmap(counts: map, maxCount: maxCount)
+                    .frame(height: 240)
+            }
+            HStack(spacing: 6) {
+                Text("少").font(.caption2).foregroundStyle(.secondary)
+                ForEach(0..<6, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(KeyboardHeatmap.color(for: Double(i) / 5.0))
+                        .frame(width: 18, height: 10)
+                }
+                Text("多").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .background(cardBackground)
+    }
+
+    private var shortcutsCard: some View {
+        let shortcuts = model.summary.topShortcuts
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("组合键 Top 10").font(.headline)
+            if shortcuts.isEmpty {
+                placeholder("暂无组合键数据").frame(height: 120)
+            } else {
+                let total = max(shortcuts.reduce(0) { $0 + $1.count }, 1)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 8) {
+                    ForEach(Array(shortcuts.enumerated()), id: \.offset) { _, sc in
+                        HStack(spacing: 10) {
+                            Text(sc.label)
+                                .font(.system(.title3, design: .monospaced).bold())
+                                .frame(minWidth: 92, alignment: .leading)
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color.secondary.opacity(0.15))
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(LinearGradient(colors: [.teal, .blue], startPoint: .leading, endPoint: .trailing))
+                                        .frame(width: max(2, geo.size.width * Double(sc.count) / Double(total)))
+                                }
+                            }
+                            .frame(height: 8)
+                            Text("\(sc.count)")
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(minWidth: 44, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
         .background(cardBackground)
     }
 
@@ -213,15 +333,6 @@ struct DashboardView: View {
     }
 
     // MARK: - Helpers
-
-    private var chartUnit: Calendar.Component {
-        switch model.period {
-        case .today: return .minute
-        case .week: return .hour
-        case .month: return .day
-        case .year: return .day
-        }
-    }
 
     private var periodSubtitle: String {
         let (s, e) = model.period.range()

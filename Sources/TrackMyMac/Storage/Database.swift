@@ -35,6 +35,12 @@ final class Database {
             );
             """,
             "CREATE INDEX IF NOT EXISTS idx_ks_ts ON keystrokes(ts);",
+            // v1.0.2: keycode + modifier mask + display label (for shortcut analytics)
+            "ALTER TABLE keystrokes ADD COLUMN keycode INTEGER;",
+            "ALTER TABLE keystrokes ADD COLUMN mods INTEGER DEFAULT 0;",
+            "ALTER TABLE keystrokes ADD COLUMN shortcut_label TEXT;",
+            "CREATE INDEX IF NOT EXISTS idx_ks_keycode ON keystrokes(keycode);",
+            "CREATE INDEX IF NOT EXISTS idx_ks_shortcut ON keystrokes(shortcut_label);",
             """
             CREATE TABLE IF NOT EXISTS mouse_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,10 +102,11 @@ final class Database {
 
     // MARK: - Inserts
 
-    func insertKeystroke(ts: Double, category: String, cipher: Data?) {
+    func insertKeystroke(ts: Double, category: String, cipher: Data?,
+                         keycode: Int? = nil, mods: Int = 0, shortcutLabel: String? = nil) {
         queue.async {
             var stmt: OpaquePointer?
-            let sql = "INSERT INTO keystrokes (ts, category, cipher) VALUES (?, ?, ?);"
+            let sql = "INSERT INTO keystrokes (ts, category, cipher, keycode, mods, shortcut_label) VALUES (?, ?, ?, ?, ?, ?);"
             if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
                 sqlite3_bind_double(stmt, 1, ts)
                 sqlite3_bind_text(stmt, 2, (category as NSString).utf8String, -1, nil)
@@ -110,6 +117,13 @@ final class Database {
                 } else {
                     sqlite3_bind_null(stmt, 3)
                 }
+                if let kc = keycode {
+                    sqlite3_bind_int(stmt, 4, Int32(kc))
+                } else {
+                    sqlite3_bind_null(stmt, 4)
+                }
+                sqlite3_bind_int(stmt, 5, Int32(mods))
+                bindOptText(stmt, 6, shortcutLabel)
                 sqlite3_step(stmt)
             }
             sqlite3_finalize(stmt)
@@ -302,6 +316,54 @@ final class Database {
             if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
                 sqlite3_bind_double(stmt, 1, from)
                 sqlite3_bind_double(stmt, 2, to)
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    rows.append((String(cString: sqlite3_column_text(stmt, 0)),
+                                 Int(sqlite3_column_int(stmt, 1))))
+                }
+            }
+            sqlite3_finalize(stmt)
+        }
+        return rows
+    }
+
+    func keycodeHeatmap(from: Double, to: Double) -> [Int: Int] {
+        var dict: [Int: Int] = [:]
+        queue.sync {
+            let sql = """
+            SELECT keycode, COUNT(*) FROM keystrokes
+             WHERE ts >= ? AND ts < ? AND keycode IS NOT NULL
+             GROUP BY keycode;
+            """
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_double(stmt, 1, from)
+                sqlite3_bind_double(stmt, 2, to)
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let kc = Int(sqlite3_column_int(stmt, 0))
+                    let n = Int(sqlite3_column_int(stmt, 1))
+                    dict[kc] = n
+                }
+            }
+            sqlite3_finalize(stmt)
+        }
+        return dict
+    }
+
+    func topShortcuts(from: Double, to: Double, limit: Int = 10) -> [(label: String, count: Int)] {
+        var rows: [(String, Int)] = []
+        queue.sync {
+            let sql = """
+            SELECT shortcut_label, COUNT(*) FROM keystrokes
+             WHERE ts >= ? AND ts < ? AND shortcut_label IS NOT NULL
+             GROUP BY shortcut_label
+             ORDER BY 2 DESC
+             LIMIT ?;
+            """
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_double(stmt, 1, from)
+                sqlite3_bind_double(stmt, 2, to)
+                sqlite3_bind_int(stmt, 3, Int32(limit))
                 while sqlite3_step(stmt) == SQLITE_ROW {
                     rows.append((String(cString: sqlite3_column_text(stmt, 0)),
                                  Int(sqlite3_column_int(stmt, 1))))

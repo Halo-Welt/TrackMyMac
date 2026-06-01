@@ -89,13 +89,29 @@ final class EventMonitor {
             if !secureInput, let c = character, !c.isEmpty {
                 cipher = Crypto.encrypt(c)
             }
-            Database.shared.insertKeystroke(ts: now, category: cat.raw, cipher: cipher)
+            let shortcutLabel = secureInput ? nil : KeyName.shortcutLabel(keyCode: Int(keyCode), flags: flags)
+            Database.shared.insertKeystroke(
+                ts: now,
+                category: cat.raw,
+                cipher: cipher,
+                keycode: Int(keyCode),
+                mods: KeyName.pack(flags),
+                shortcutLabel: shortcutLabel
+            )
             Database.shared.bumpMinute(minuteTs: minute, keys: 1)
 
         case .flagsChanged:
-            // Modifier key transitions; count as modifier press only on key-down-ish.
+            // Modifier key transitions; we record the keycode for completeness but
+            // never as a shortcut (modifier alone is not a shortcut).
             let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-            Database.shared.insertKeystroke(ts: now, category: KeyCategory.categorize(keyCode: keyCode, flags: event.flags, character: nil).raw, cipher: nil)
+            Database.shared.insertKeystroke(
+                ts: now,
+                category: KeyCategory.categorize(keyCode: keyCode, flags: event.flags, character: nil).raw,
+                cipher: nil,
+                keycode: Int(keyCode),
+                mods: KeyName.pack(event.flags),
+                shortcutLabel: nil
+            )
 
         case .leftMouseDown:
             let p = event.location
