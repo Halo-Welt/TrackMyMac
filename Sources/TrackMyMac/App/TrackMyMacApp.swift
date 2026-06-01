@@ -1,54 +1,31 @@
 import SwiftUI
 import AppKit
 
+/// Headless menu-bar-only app. No Dock icon, no main window.
+/// Click the status item to toggle a popover containing the dashboard.
 @main
 struct TrackMyMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        WindowGroup("TrackMyMac") {
-            RootView(perms: appDelegate.permsModel)
-                .frame(minWidth: 880, minHeight: 620)
-        }
-        .windowResizability(.contentSize)
-        .commands {
-            CommandGroup(replacing: .appInfo) {
-                Button("关于 TrackMyMac") {
-                    NSApp.orderFrontStandardAboutPanel(nil)
-                }
-            }
-        }
+        // A "Settings" scene is the only Scene that doesn't auto-create a window
+        // when the app launches. We don't actually use it.
+        Settings { EmptyView() }
     }
 }
 
-struct RootView: View {
-    @ObservedObject var perms: PermissionsModel
-    @State private var showOnboarding: Bool = false
-
-    var body: some View {
-        ZStack {
-            DashboardView(perms: perms)
-            if showOnboarding {
-                Color.black.opacity(0.35).ignoresSafeArea()
-                OnboardingView(perms: perms) {
-                    showOnboarding = false
-                }
-                .background(RoundedRectangle(cornerRadius: 14).fill(Color(NSColor.windowBackgroundColor)).shadow(radius: 20))
-            }
-        }
-        .onAppear {
-            perms.refresh()
-            if !perms.allGranted { showOnboarding = true }
-        }
-    }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let permsModel = PermissionsModel()
-    private var statusItem: NSStatusItem?
+
+    private var statusItem: NSStatusItem!
+    private var popover: NSPopover!
     private var permTimer: Timer?
+    private var eventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Force the app to never show in the Dock or Cmd-Tab.
+        NSApp.setActivationPolicy(.accessory)
+
         // Trigger AX prompt early – this is necessary for CGEventTap & AXUIElement.
         Permissions.promptAccessibility()
         Permissions.promptScreenRecording()
@@ -57,18 +34,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         EventMonitor.shared.start()
         AppTracker.shared.start()
         ActivitySampler.shared.start()
-
-        installMenuBar()
         UpdateChecker.shared.startAutomaticChecks()
 
-        // Periodically refresh permission badges + retry tap if it failed.
+        installPopover()
+        installStatusItem()
+        installGlobalDismissMonitor()
+
         permTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             if !EventMonitor.shared.running {
                 EventMonitor.shared.start()
             }
             self.permsModel.refresh()
-            self.refreshMenuBarTitle()
+            self.refreshStatusItemTitle()
         }
         RunLoop.main.add(permTimer!, forMode: .common)
         permsModel.refresh()
@@ -78,68 +56,118 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         EventMonitor.shared.stop()
         AppTracker.shared.stop()
         ActivitySampler.shared.stop()
+        if let m = eventMonitor { NSEvent.removeMonitor(m) }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Keep running in menu bar
-        return false
+    // MARK: - Popover
+
+    private func installPopover() {
+        let p = NSPopover()
+        p.behavior = .transient   // auto-dismiss when clicking outside
+        p.animates = true
+        p.delegate = self
+        p.contentSize = NSSize(width: 880, height: 620)
+        p.contentViewController = NSHostingController(
+            rootView: PopoverRootView(perms: permsModel)
+        )
+        popover = p
     }
 
-    // MARK: - Menu bar
+    // MARK: - Status item
 
-    private func installMenuBar() {
+    private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "gauge.with.dots.needle.bottom.50percent", accessibilityDescription: "TrackMyMac")
+            button.image = NSImage(systemSymbolName: "gauge.with.dots.needle.bottom.50percent",
+                                   accessibilityDescription: "TrackMyMac")
             button.imagePosition = .imageLeft
-            button.title = ""
+            button.target = self
+            button.action = #selector(statusButtonClicked(_:))
+            // accept both left and right click
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        let menu = NSMenu()
-        menu.addItem(withTitle: "今日按键: -", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "今日点击: -", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "今日活跃: -", action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "打开仪表盘", action: #selector(openDashboard), keyEquivalent: "d").target = self
-        menu.addItem(withTitle: "在 Finder 显示数据库", action: #selector(revealDB), keyEquivalent: "")
-            .target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "检查更新…", action: #selector(checkUpdate), keyEquivalent: "u")
-            .target = self
-        let aboutItem = menu.addItem(withTitle: "关于 / 版本：v\(UpdateChecker.shared.currentVersion)", action: nil, keyEquivalent: "")
-        aboutItem.isEnabled = false
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "退出 TrackMyMac", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        item.menu = menu
         statusItem = item
-        refreshMenuBarTitle()
+        refreshStatusItemTitle()
     }
 
-    private func refreshMenuBarTitle() {
-        guard let menu = statusItem?.menu, menu.items.count >= 3 else { return }
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: Date()).timeIntervalSince1970
-        let end = Date().timeIntervalSince1970
-        let s = Database.shared.summary(from: start, to: end)
-        menu.items[0].title = "今日按键: \(s.keys)"
-        menu.items[1].title = "今日点击: \(s.clicks)"
-        menu.items[2].title = "今日活跃: \(formatDuration(s.activeSec))"
-        if let button = statusItem?.button {
-            button.title = " \(formatDuration(s.activeSec))"
-        }
-    }
-
-    @objc private func openDashboard() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.title == "TrackMyMac" {
-            window.makeKeyAndOrderFront(nil)
+    @objc private func statusButtonClicked(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        let isRightClick = event?.type == .rightMouseUp
+            || (event?.modifierFlags.contains(.control) ?? false)
+        if isRightClick {
+            showContextMenu(sender)
             return
         }
-        // If no window, ask AppKit to create one via the WindowGroup
-        if let url = URL(string: "trackmymac://open") {
-            NSWorkspace.shared.open(url)
+        togglePopover(sender)
+    }
+
+    private func togglePopover(_ sender: NSStatusBarButton) {
+        if popover.isShown {
+            popover.performClose(sender)
+        } else {
+            showPopover(sender)
         }
     }
+
+    private func showPopover(_ sender: NSStatusBarButton) {
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+    }
+
+    private func showContextMenu(_ sender: NSStatusBarButton) {
+        let menu = NSMenu()
+        let header = NSMenuItem(title: "TrackMyMac v\(UpdateChecker.shared.currentVersion)", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(.separator())
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: Date()).timeIntervalSince1970
+        let s = Database.shared.summary(from: start, to: Date().timeIntervalSince1970)
+        menu.addItem(withTitle: "今日按键: \(s.keys)", action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(withTitle: "今日点击: \(s.clicks)", action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(withTitle: "今日活跃: \(formatDuration(s.activeSec))", action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(.separator())
+        let revealItem = NSMenuItem(title: "在 Finder 显示数据库", action: #selector(revealDB), keyEquivalent: "")
+        revealItem.target = self
+        menu.addItem(revealItem)
+        let updateItem = NSMenuItem(title: "检查更新…", action: #selector(checkUpdate), keyEquivalent: "u")
+        updateItem.target = self
+        menu.addItem(updateItem)
+        let openSettings = NSMenuItem(title: "打开权限设置…", action: #selector(openPermissionsSettings), keyEquivalent: ",")
+        openSettings.target = self
+        menu.addItem(openSettings)
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "退出 TrackMyMac",
+                     action: #selector(NSApplication.terminate(_:)),
+                     keyEquivalent: "q")
+
+        // Show as menu, not popover
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        // Reset so next left-click toggles popover again
+        DispatchQueue.main.async { [weak self] in
+            self?.statusItem.menu = nil
+        }
+    }
+
+    private func refreshStatusItemTitle() {
+        guard let button = statusItem?.button else { return }
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: Date()).timeIntervalSince1970
+        let s = Database.shared.summary(from: start, to: Date().timeIntervalSince1970)
+        button.title = " \(formatDuration(s.activeSec))"
+    }
+
+    // MARK: - Global click outside dismissal (also handles right-click anywhere)
+
+    private func installGlobalDismissMonitor() {
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self = self, self.popover.isShown else { return }
+            self.popover.performClose(nil)
+        }
+    }
+
+    // MARK: - Menu actions
 
     @objc private func revealDB() {
         NSWorkspace.shared.activateFileViewerSelecting([Paths.databaseURL])
@@ -147,5 +175,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func checkUpdate() {
         UpdateChecker.shared.check(silent: false)
+    }
+
+    @objc private func openPermissionsSettings() {
+        Permissions.openInputMonitoringSettings()
+    }
+}
+
+/// Root view shown inside the popover.
+struct PopoverRootView: View {
+    @ObservedObject var perms: PermissionsModel
+    @State private var showOnboarding: Bool = false
+
+    var body: some View {
+        ZStack {
+            DashboardView(perms: perms)
+            if showOnboarding {
+                Color.black.opacity(0.35).ignoresSafeArea()
+                OnboardingView(perms: perms) { showOnboarding = false }
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color(NSColor.windowBackgroundColor))
+                            .shadow(radius: 20)
+                    )
+            }
+        }
+        .frame(width: 880, height: 620)
+        .onAppear {
+            perms.refresh()
+            if !perms.allGranted { showOnboarding = true }
+        }
     }
 }
