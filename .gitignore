@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+build/
+*.xcodeproj/
+DerivedData/
+.DS_Store
+*.dmg
+*.zip
+docs/dashboard.png.bak

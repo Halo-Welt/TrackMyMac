@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>TrackMyMac</string>
+    <key>CFBundleDisplayName</key>
+    <string>TrackMyMac</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.trackmymac.app</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>TrackMyMac</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>用于读取当前活动应用的标题与状态。</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>用于读取当前应用窗口标题，统计你在不同应用上花费的时间。</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>用于读取浏览器/编辑器窗口标题（不会保存截图）。</string>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>用于统计键盘与鼠标的全局活动次数。密码字段会自动跳过，不会上传任何数据。</string>
+</dict>
+</plist>
