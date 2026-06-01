@@ -22,7 +22,6 @@ final class EventMonitor {
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.rightMouseDown.rawValue) |
             (1 << CGEventType.otherMouseDown.rawValue) |
-            (1 << CGEventType.scrollWheel.rawValue) |
             (1 << CGEventType.mouseMoved.rawValue)
 
         let opaqueSelf = Unmanaged.passUnretained(self).toOpaque()
@@ -127,9 +126,6 @@ final class EventMonitor {
             let p = event.location
             Database.shared.insertMouseEvent(ts: now, kind: "other", x: Double(p.x), y: Double(p.y))
             Database.shared.bumpMinute(minuteTs: minute, clicks: 1)
-
-        case .scrollWheel:
-            Database.shared.bumpMinute(minuteTs: minute, scrolls: 1)
 
         case .mouseMoved:
             // Approximate distance using delta fields when present.

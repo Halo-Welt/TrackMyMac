@@ -17,11 +17,8 @@ struct DashboardView: View {
                     statsCards
                     timelineCard
                     keyboardHeatmapCard
-                    HStack(alignment: .top, spacing: 16) {
-                        topAppsCard
-                        keyCategoryCard
-                    }
                     shortcutsCard
+                    topAppsCard
                     footer
                 }
                 .padding(20)
@@ -89,7 +86,7 @@ struct DashboardView: View {
         let s = model.summary
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 4), spacing: 14) {
             StatCard(title: "键盘按键", value: "\(s.keys)", subtitle: "次", systemImage: "keyboard", tint: .blue)
-            StatCard(title: "鼠标点击", value: "\(s.clicks)", subtitle: "次  滚轮 \(s.scrolls)", systemImage: "cursorarrow.click.2", tint: .pink)
+            StatCard(title: "鼠标点击", value: "\(s.clicks)", subtitle: "次", systemImage: "cursorarrow.click.2", tint: .pink)
             StatCard(title: "活跃时长", value: formatDuration(s.activeSec), subtitle: nil, systemImage: "bolt.fill", tint: .green)
             StatCard(title: "亮屏时长", value: formatDuration(s.screenSec), subtitle: "鼠标移动 \(Int(s.moveDist)) px", systemImage: "display", tint: .orange)
         }
@@ -227,10 +224,10 @@ struct DashboardView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
             }
             if totalKeys == 0 {
-                placeholder("暂无按键数据").frame(height: 220)
+                placeholder("暂无按键数据").frame(height: 280)
             } else {
                 KeyboardHeatmap(counts: map, maxCount: maxCount)
-                    .frame(height: 240)
+                    .frame(height: 280)
             }
             HStack(spacing: 6) {
                 Text("少").font(.caption2).foregroundStyle(.secondary)
@@ -283,38 +280,6 @@ struct DashboardView: View {
         .background(cardBackground)
     }
 
-    private var keyCategoryCard: some View {
-        let cats = model.summary.keyCategories
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("按键类别分布").font(.headline)
-            if cats.isEmpty {
-                placeholder("暂无键盘数据").frame(height: 200)
-            } else {
-                Chart {
-                    ForEach(Array(cats.enumerated()), id: \.offset) { _, c in
-                        SectorMark(
-                            angle: .value("数量", c.1),
-                            innerRadius: .ratio(0.55),
-                            angularInset: 1.2
-                        )
-                        .foregroundStyle(by: .value("类别", localized(c.0)))
-                        .annotation(position: .overlay) {
-                            if Double(c.1) / Double(max(cats.reduce(0) { $0 + $1.1 }, 1)) > 0.05 {
-                                Text("\(c.1)")
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                    }
-                }
-                .frame(height: 220)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-    }
-
     private var footer: some View {
         HStack {
             Image(systemName: "lock.shield")
@@ -353,20 +318,6 @@ struct DashboardView: View {
         RoundedRectangle(cornerRadius: 12)
             .fill(Color(NSColor.windowBackgroundColor))
             .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-    }
-
-    private func localized(_ raw: String) -> String {
-        switch raw {
-        case "letter": return "字母"
-        case "digit": return "数字"
-        case "symbol": return "符号"
-        case "whitespace": return "空白键"
-        case "navigation": return "导航键"
-        case "function": return "功能键"
-        case "modifier": return "修饰键"
-        case "shortcut": return "快捷键"
-        default: return "其他"
-        }
     }
 }
 
