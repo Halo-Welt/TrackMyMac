@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var eventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if SummaryJSONExporter.runIfNeeded() {
+            return
+        }
+
         // Force the app to never show in the Dock or Cmd-Tab.
         NSApp.setActivationPolicy(.accessory)
 
