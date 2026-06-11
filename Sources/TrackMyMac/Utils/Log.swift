@@ -3,23 +3,34 @@ import os
 
 enum Log {
     static let log = OSLog(subsystem: "com.trackmymac.app", category: "main")
+    static var suppressConsoleLogs = false
+    static var mirrorConsoleLogsToStandardError = false
 
     static func info(_ msg: String) {
         os_log("%{public}@", log: log, type: .info, msg)
         #if DEBUG
-        print("[INFO] \(msg)")
+        writeConsole("[INFO] \(msg)")
         #endif
     }
 
     static func error(_ msg: String) {
         os_log("%{public}@", log: log, type: .error, msg)
-        print("[ERROR] \(msg)")
+        writeConsole("[ERROR] \(msg)")
     }
 
     static func debug(_ msg: String) {
         #if DEBUG
-        print("[DEBUG] \(msg)")
+        writeConsole("[DEBUG] \(msg)")
         #endif
+    }
+
+    private static func writeConsole(_ msg: String) {
+        guard !suppressConsoleLogs else { return }
+        if mirrorConsoleLogsToStandardError {
+            FileHandle.standardError.write(Data((msg + "\n").utf8))
+        } else {
+            print(msg)
+        }
     }
 }
 

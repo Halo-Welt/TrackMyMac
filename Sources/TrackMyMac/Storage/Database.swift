@@ -35,12 +35,6 @@ final class Database {
             );
             """,
             "CREATE INDEX IF NOT EXISTS idx_ks_ts ON keystrokes(ts);",
-            // v1.0.2: keycode + modifier mask + display label (for shortcut analytics)
-            "ALTER TABLE keystrokes ADD COLUMN keycode INTEGER;",
-            "ALTER TABLE keystrokes ADD COLUMN mods INTEGER DEFAULT 0;",
-            "ALTER TABLE keystrokes ADD COLUMN shortcut_label TEXT;",
-            "CREATE INDEX IF NOT EXISTS idx_ks_keycode ON keystrokes(keycode);",
-            "CREATE INDEX IF NOT EXISTS idx_ks_shortcut ON keystrokes(shortcut_label);",
             """
             CREATE TABLE IF NOT EXISTS mouse_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +75,12 @@ final class Database {
             """
         ]
         for s in stmts { exec(s) }
+        // v1.0.2: keycode + modifier mask + display label (for shortcut analytics)
+        addColumnIfMissing(table: "keystrokes", column: "keycode", definition: "INTEGER")
+        addColumnIfMissing(table: "keystrokes", column: "mods", definition: "INTEGER DEFAULT 0")
+        addColumnIfMissing(table: "keystrokes", column: "shortcut_label", definition: "TEXT")
+        exec("CREATE INDEX IF NOT EXISTS idx_ks_keycode ON keystrokes(keycode);")
+        exec("CREATE INDEX IF NOT EXISTS idx_ks_shortcut ON keystrokes(shortcut_label);")
     }
 
     @discardableResult
@@ -98,6 +98,31 @@ final class Database {
             }
         }
         return ok
+    }
+
+    private func addColumnIfMissing(table: String, column: String, definition: String) {
+        queue.sync {
+            var exists = false
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, "PRAGMA table_info(\(table));", -1, &stmt, nil) == SQLITE_OK {
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    let name = String(cString: sqlite3_column_text(stmt, 1))
+                    if name == column {
+                        exists = true
+                        break
+                    }
+                }
+            }
+            sqlite3_finalize(stmt)
+            guard !exists else { return }
+
+            let sql = "ALTER TABLE \(table) ADD COLUMN \(column) \(definition);"
+            var err: UnsafeMutablePointer<CChar>?
+            if sqlite3_exec(db, sql, nil, nil, &err) != SQLITE_OK, let err {
+                Log.error("SQL error: \(String(cString: err)) for: \(sql)")
+                sqlite3_free(err)
+            }
+        }
     }
 
     // MARK: - Inserts
